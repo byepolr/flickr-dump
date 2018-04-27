@@ -1,3 +1,4 @@
+.DS_Store
 *.gem
 *.rbc
 /.config
@@ -9,6 +10,7 @@
 /test/tmp/
 /test/version_tmp/
 /tmp/
+.sass-cache/
 
 # Used by dotenv library to load environment variables.
 # .env
@@ -54,3 +56,9 @@ settings.yml
 
 # Ignore Byebug history
 .byebug_history
+
+# Ignore downloaded images directory
+images
+
+# Ignore log files
+log.txt

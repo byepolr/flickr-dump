@@ -14,6 +14,7 @@ require 'fileutils'
 class FlickrDump
   SETTINGS_FILE = 'settings.yml'.freeze
   DEFAULT_PATH = './images'.freeze
+  DEFAULT_PAGE_SIZE = 500
 
   def self.run(options)
     new(options).run
@@ -21,10 +22,12 @@ class FlickrDump
 
   def initialize(options)
     @path = options['path'] || DEFAULT_PATH
+    FileUtils.mkdir_p(@path) unless File.exist?(@path)
+
     FlickRaw.api_key = options['api_key']
     FlickRaw.shared_secret = options['api_secret']
 
-    load_credentials
+    load_settings
 
     if @access_token.nil? || @access_secret.nil?
       authorize_account
@@ -51,18 +54,18 @@ class FlickrDump
     puts "Authentication failed : #{e.msg}"
   end
 
-  def load_credentials
+  def load_settings
     return unless File.file?(SETTINGS_FILE)
 
-    settings = YAML::load_file(SETTINGS_FILE)
+    settings = YAML.load_file(SETTINGS_FILE)
     @access_token = settings[:access_token]
     @access_secret = settings[:access_secret]
   end
 
-  def save_credentials(access_token, access_secret)
+  def save_settings(access_token: nil, access_secret: nil)
     settings = {
-      access_token: access_token,
-      access_secret: access_secret
+      access_token: access_token || @access_token,
+      access_secret: access_secret || @access_secret,
     }
     File.open(SETTINGS_FILE, 'w') do |file|
       file.write settings.to_yaml
@@ -70,6 +73,68 @@ class FlickrDump
   end
 
   def run
+    flickr.photosets.getList.each do |photoset|
+      download_photoset(photoset)
+    end
+  ensure
+    save_settings
+  end
+
+  def download_photoset(photoset)
+    puts "Downloading photos from photoset: #{photoset.title}"
+    photoset_path = "#{@path}/#{photoset.title}"
+    FileUtils.mkdir_p(photoset_path) unless File.exist?(photoset_path)
+
+    page_num = 1
+    until (photos = get_photoset_page(id: photoset['id'].to_i, page_num: page_num).photo).empty?
+      photos.each do |photo|
+        process_photo(photo: photo, photoset_path: photoset_path)
+      end
+      page_num += 1
+    end
+  end
+
+  def get_photoset_page(id:, page_num:)
+    flickr.photosets.getPhotos(
+      photoset_id: id,
+      page: page_num,
+      per_page: DEFAULT_PAGE_SIZE
+    )
+  end
+
+  def process_photo(photo: photo, photoset_path:)
+    details = flickr.photos.getInfo(photo_id: photo['id'])
+    date_taken = Time.parse(details.dates.taken)
+    filename = (details.title == '' ? details.id : details.title) + '.' + details.originalformat
+    filepath = "#{photoset_path}/#{filename}"
+
+    if File.exist?(filepath)
+      puts "Already downloaded photo: #{filepath}"
+      sleep(1)
+      return
+    end
+
+    sizes = flickr.photos.getSizes(photo_id: photo['id'])
+    original = sizes.select { |s| s['label'] == 'Original' }.first
+
+    download_file(url: original['source'], filepath: filepath)
+    FileUtils.touch(filepath, mtime: date_taken)
+    sleep(2)
+  rescue => ex
+    save_settings
+    msg = "FAIL: photoid: #{photo['id']}\terror: #{ex}\n"
+    puts msg
+    open('log.txt', 'a') { |f| f << msg }
+  end
+
+  def download_file(url:, filepath:)
+    return if url.nil? || url.length <= 0
+    puts "Downloading: #{url}"
+    agent.get(url).save(filepath)
+  end
+
+  def agent
+    @agent ||= Mechanize.new
   end
 end
 
